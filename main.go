@@ -47,7 +47,7 @@ type Config struct {
 	BotID     int64
 	BotToken  string
 	BotSecret string
-	GuildID   string
+	GuildIDs  []string
 }
 
 func main() {
@@ -71,69 +71,73 @@ func main() {
 		os.Exit(2)
 	}
 
-	// Get all of the Discord channels in the server
-	chs, err := discord.GuildChannels(cfg.GuildID)
-	if err != nil {
-		fmt.Println("Cannot read channels of guild")
-		os.Exit(1)
-	}
+	var timeGuilds = make(map[string]map[string]*discordgo.Channel)
 
-	// Determine if the existing voice channel exists for time keeping
-	var timeChannels = map[string]*discordgo.Channel{
-		"UTC":  nil,
-		"PST":  nil,
-		"EST":  nil,
-		"AEST": nil,
-	}
-
-	for _, chv := range chs {
-		if chv.Type != discordgo.ChannelTypeGuildVoice {
-			continue
+	for _, guildID := range cfg.GuildIDs {
+		// Get all of the Discord channels in the server
+		chs, err := discord.GuildChannels(guildID)
+		if err != nil {
+			fmt.Println("Cannot read channels of guild")
+			os.Exit(1)
 		}
-		// Find the channel based on whether or not it has a clock at the start of the channel name
-		chNameParts := strings.Split(chv.Name, " ")
-		if len(chNameParts) > 2 { // Change this to 3 if using clock faces
-			// clockFace := chNameParts[0]
-			// tz := chNameParts[2]
-			tz := chNameParts[1]
-			mapTZ := ""
 
-			switch tz {
-			case "PST", "PDT":
-				mapTZ = "PST"
-				break
-			case "EST", "EDT":
-				mapTZ = "EST"
-				break
-			case "AEST", "AEDT":
-				mapTZ = "AEST"
-				break
-			case "UTC":
-				mapTZ = "UTC"
-				break
-			default:
+		// Determine if the existing voice channel exists for time keeping
+		timeGuilds[guildID] = map[string]*discordgo.Channel{
+			"UTC":  nil,
+			"PST":  nil,
+			"EST":  nil,
+			"AEST": nil,
+		}
+
+		for _, chv := range chs {
+			if chv.Type != discordgo.ChannelTypeGuildVoice {
 				continue
 			}
-			timeChannels[mapTZ] = chv
+			// Find the channel based on whether or not it has a clock at the start of the channel name
+			chNameParts := strings.Split(chv.Name, " ")
+			if len(chNameParts) > 2 { // Change this to 3 if using clock faces
+				// clockFace := chNameParts[0]
+				// tz := chNameParts[2]
+				tz := chNameParts[1]
+				mapTZ := ""
 
-			// // Determine if the first part of the channel name is a clock face
-			// for _, clock := range times {
-			// 	if clockFace == clock {
-			// 		timeChannels[mapTZ] = chv
-			// 		break
-			// 	}
-			// }
+				switch tz {
+				case "PST", "PDT":
+					mapTZ = "PST"
+					break
+				case "EST", "EDT":
+					mapTZ = "EST"
+					break
+				case "AEST", "AEDT":
+					mapTZ = "AEST"
+					break
+				case "UTC":
+					mapTZ = "UTC"
+					break
+				default:
+					continue
+				}
+				timeGuilds[guildID][mapTZ] = chv
+
+				// // Determine if the first part of the channel name is a clock face
+				// for _, clock := range times {
+				// 	if clockFace == clock {
+				// 		timeChannels[mapTZ] = chv
+				// 		break
+				// 	}
+				// }
+			}
 		}
-	}
 
-	// If the channel doesn't exist, create it
-	for k := range timeChannels {
-		if timeChannels[k] == nil {
-			format := makeChannelName(k)
-			timeChannels[k], err = discord.GuildChannelCreate(cfg.GuildID, format, discordgo.ChannelTypeGuildVoice)
-			if err != nil {
-				fmt.Println(err.Error())
-				os.Exit(1)
+		// If the channel doesn't exist, create it
+		for k := range timeGuilds[guildID] {
+			if timeGuilds[guildID][k] == nil {
+				format := makeChannelName(k)
+				timeGuilds[guildID][k], err = discord.GuildChannelCreate(guildID, format, discordgo.ChannelTypeGuildVoice)
+				if err != nil {
+					fmt.Println(err.Error())
+					os.Exit(1)
+				}
 			}
 		}
 	}
@@ -147,19 +151,21 @@ func main() {
 			case <-ticker.C:
 				// Only update every 5 minutes
 				if time.Now().Minute()%5 == 0 {
-					for k := range timeChannels {
-						if timeChannels[k] == nil {
-							continue
-						}
-						format := makeChannelName(k)
-						// Only attempt to update the channel name if the new name format doesn't match the current one
-						// This is so that we don't keep trying to update 5:00 to 5:00 for example, since there would
-						// theoretically be 11 attempts to change the name in the minute and Discord channels have a rate
-						// limit of 2 updates per 10 minutes
-						if timeChannels[k].Name != format {
-							timeChannels[k], err = discord.ChannelEdit(timeChannels[k].ID, format)
-							if err != nil {
-								fmt.Println(err.Error())
+					for _, timeChannels := range timeGuilds {
+						for k := range timeChannels {
+							if timeChannels[k] == nil {
+								continue
+							}
+							format := makeChannelName(k)
+							// Only attempt to update the channel name if the new name format doesn't match the current one
+							// This is so that we don't keep trying to update 5:00 to 5:00 for example, since there would
+							// theoretically be 11 attempts to change the name in the minute and Discord channels have a rate
+							// limit of 2 updates per 10 minutes
+							if timeChannels[k].Name != format {
+								timeChannels[k], err = discord.ChannelEdit(timeChannels[k].ID, format)
+								if err != nil {
+									fmt.Println(err.Error())
+								}
 							}
 						}
 					}
